@@ -5,6 +5,8 @@ const MAX_FILE_BYTES = CHUNK_SIZE * MAX_CHUNKS;
 const UUID_RE = /^[a-f0-9-]{36}$/i;
 const TOKEN_HASH_RE = /^[a-f0-9]{64}$/;
 const B64URL_RE = /^[A-Za-z0-9_-]+$/;
+const NOTION_VERSION = "2026-03-11";
+const NOTION_API = "https://api.notion.com/v1";
 
 function corsHeaders(request, env) {
   const origin = request.headers.get("Origin") || "";
@@ -87,6 +89,93 @@ async function readJson(request, maxBytes = 1024 * 1024) {
   return JSON.parse(new TextDecoder().decode(await readBytes(request, maxBytes)));
 }
 
+function storageConfigured(env) {
+  return typeof env.NOTION_TOKEN === "string" && env.NOTION_TOKEN.length > 20 &&
+    typeof env.NOTION_ROOT_PAGE_ID === "string" && env.NOTION_ROOT_PAGE_ID.length >= 20;
+}
+
+async function notionRequest(env, path, init = {}) {
+  if (!storageConfigured(env)) throw new Error("Notion Drive storage is not configured");
+  const headers = new Headers(init.headers || {});
+  headers.set("Authorization", `Bearer ${env.NOTION_TOKEN}`);
+  headers.set("Notion-Version", NOTION_VERSION);
+  if (init.body && !(init.body instanceof FormData) && !headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  const fetcher = env.NOTION_FETCH || fetch;
+  const response = await fetcher(`${NOTION_API}${path}`, { ...init, headers });
+  if (!response.ok) throw new Error(`Notion API request failed (${response.status})`);
+  return response;
+}
+
+async function notionJson(env, path, init = {}) {
+  return notionRequest(env, path, init).then((response) => response.json());
+}
+
+async function createStoragePage(env, shareId) {
+  const title = `NDSHARE1.${shareId}`;
+  return notionJson(env, "/pages", {
+    method: "POST",
+    body: JSON.stringify({
+      parent: { type: "page_id", page_id: env.NOTION_ROOT_PAGE_ID },
+      properties: { title: { type: "title", title: [{ type: "text", text: { content: title } }] } },
+    }),
+  });
+}
+
+async function trashStoragePage(env, pageId) {
+  if (!pageId) return;
+  await notionRequest(env, `/pages/${encodeURIComponent(pageId)}`, {
+    method: "PATCH",
+    body: JSON.stringify({ in_trash: true }),
+  });
+}
+
+function notionFileName(shareId, chunkIndex) {
+  return `NDS-${shareId}-${String(chunkIndex).padStart(5, "0")}.bin`;
+}
+
+async function uploadNotionChunk(env, pageId, shareId, chunkIndex, bytes) {
+  const filename = notionFileName(shareId, chunkIndex);
+  const upload = await notionJson(env, "/file_uploads", {
+    method: "POST",
+    body: JSON.stringify({ filename, content_type: "application/octet-stream" }),
+  });
+  if (!upload?.id) throw new Error("Notion did not return a file upload ID");
+  const form = new FormData();
+  form.append("file", new Blob([bytes], { type: "application/octet-stream" }), filename);
+  await notionRequest(env, `/file_uploads/${encodeURIComponent(upload.id)}/send`, { method: "POST", body: form });
+  const attached = await notionJson(env, `/blocks/${encodeURIComponent(pageId)}/children`, {
+    method: "PATCH",
+    body: JSON.stringify({ children: [{ object: "block", type: "file", file: { type: "file_upload", file_upload: { id: upload.id } } }] }),
+  });
+  const blockId = attached?.results?.[0]?.id;
+  if (!blockId) throw new Error("Notion did not return the stored file block ID");
+  return blockId;
+}
+
+function allowedNotionFileUrl(input) {
+  let url;
+  try { url = new URL(input); } catch { return false; }
+  if (url.protocol !== "https:" || url.username || url.password || (url.port && url.port !== "443")) return false;
+  const host = url.hostname.toLowerCase();
+  return host === "file.notion.so" || host === "files.notion.so" || host === "notion-static.com" ||
+    host.endsWith(".notion-static.com") || host.endsWith(".notionusercontent.com") ||
+    host === "amazonaws.com" || host.endsWith(".amazonaws.com");
+}
+
+async function fetchNotionFile(env, initialUrl) {
+  let url = initialUrl;
+  const fetcher = env.NOTION_FETCH || fetch;
+  for (let redirect = 0; redirect <= 4; redirect++) {
+    if (!allowedNotionFileUrl(url)) throw new Error("Notion returned a disallowed file URL");
+    const response = await fetcher(url, { redirect: "manual" });
+    if (![301, 302, 303, 307, 308].includes(response.status)) return response;
+    const location = response.headers.get("Location");
+    if (!location) throw new Error("Notion file redirect did not include a location");
+    url = new URL(location, url).href;
+  }
+  throw new Error("Too many Notion file redirects");
+}
+
 async function createShare(request, env) {
   if (!(await requireAdmin(request, env))) return failure(request, env, "管理者驗證失敗。", 401);
   let body;
@@ -113,12 +202,18 @@ async function createShare(request, env) {
 
   const existing = await env.DB.prepare("SELECT id FROM shares WHERE id = ?").bind(id).first();
   if (existing) return failure(request, env, "分享識別碼已存在，請重試。", 409);
+  if (!storageConfigured(env)) return failure(request, env, "Notion Drive 儲存尚未設定。", 503);
+  let storagePage;
+  try { storagePage = await createStoragePage(env, id); }
+  catch { return failure(request, env, "無法在 Notion Drive 建立分享儲存頁；請檢查 integration 權限與根頁面設定。", 502); }
+  if (!storagePage?.id) return failure(request, env, "Notion Drive 沒有建立分享儲存頁。", 502);
   const createdAt = new Date().toISOString();
-  const statements = [env.DB.prepare("INSERT INTO shares (id, metadata, nonce_prefix, chunk_size, chunk_count, plaintext_size, state, created_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', ?)")
-    .bind(id, JSON.stringify(body.metadata), body.noncePrefix, chunkSize, chunkCount, plaintextSize, createdAt),
+  const statements = [env.DB.prepare("INSERT INTO shares (id, storage_page_id, metadata, nonce_prefix, chunk_size, chunk_count, plaintext_size, state, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)")
+    .bind(id, storagePage.id, JSON.stringify(body.metadata), body.noncePrefix, chunkSize, chunkCount, plaintextSize, createdAt),
     ...recipients.map((recipient) => env.DB.prepare("INSERT INTO recipients (id, share_id, label, token_hash, envelope, created_at) VALUES (?, ?, ?, ?, ?, ?)")
     .bind(recipient.id, id, recipient.label.trim(), recipient.tokenHash, JSON.stringify(recipient.envelope), createdAt))];
-  await env.DB.batch(statements);
+  try { await env.DB.batch(statements); }
+  catch (error) { await trashStoragePage(env, storagePage.id).catch(() => {}); throw error; }
   return json(request, env, { id, state: "pending" }, 201);
 }
 
@@ -136,10 +231,13 @@ async function uploadChunk(request, env, id, index) {
   let bytes;
   try { bytes = await readBytes(request, expectedLength); } catch { return failure(request, env, "加密區塊長度不符。", 400); }
   if (bytes.byteLength !== expectedLength) return failure(request, env, "加密區塊長度不符。", 400);
-  const key = `${id}/${String(chunkIndex).padStart(5, "0")}`;
-  await env.SHARES.put(key, bytes, { httpMetadata: { contentType: "application/octet-stream" } });
-  await env.DB.prepare("INSERT INTO uploaded_chunks (share_id, chunk_index, byte_length) VALUES (?, ?, ?) ON CONFLICT(share_id, chunk_index) DO UPDATE SET byte_length = excluded.byte_length")
-    .bind(id, chunkIndex, bytes.byteLength).run();
+  const existing = await env.DB.prepare("SELECT byte_length FROM uploaded_chunks WHERE share_id = ? AND chunk_index = ?").bind(id, chunkIndex).first();
+  if (existing) return Number(existing.byte_length) === bytes.byteLength
+    ? json(request, env, { index: chunkIndex, stored: true })
+    : failure(request, env, "已儲存的區塊長度不符。", 409);
+  const blockId = await uploadNotionChunk(env, share.storage_page_id, id, chunkIndex, bytes);
+  await env.DB.prepare("INSERT INTO uploaded_chunks (share_id, chunk_index, byte_length, notion_block_id) VALUES (?, ?, ?, ?)")
+    .bind(id, chunkIndex, bytes.byteLength, blockId).run();
   return json(request, env, { index: chunkIndex, stored: true });
 }
 
@@ -193,9 +291,14 @@ async function getPublicChunk(request, env, id, index) {
   if (!/^\d{1,5}$/.test(index)) return failure(request, env, "區塊位置無效。", 400);
   const chunkIndex = Number(index);
   if (chunkIndex < 0 || chunkIndex >= access.chunk_count) return failure(request, env, "區塊位置超出範圍。", 404);
-  const object = await env.SHARES.get(`${id}/${String(chunkIndex).padStart(5, "0")}`);
-  if (!object) return failure(request, env, "分享區塊不存在。", 404);
-  return binary(request, env, object.body);
+  const stored = await env.DB.prepare("SELECT notion_block_id FROM uploaded_chunks WHERE share_id = ? AND chunk_index = ?").bind(id, chunkIndex).first();
+  if (!stored?.notion_block_id) return failure(request, env, "分享區塊不存在。", 404);
+  const block = await notionJson(env, `/blocks/${encodeURIComponent(stored.notion_block_id)}`);
+  const fileUrl = block?.file?.file?.url || block?.file?.url;
+  if (!fileUrl) return failure(request, env, "Notion Drive 找不到這個加密區塊。", 404);
+  const file = await fetchNotionFile(env, fileUrl);
+  if (!file.ok || !file.body) return failure(request, env, "無法從 Notion Drive 讀取加密區塊。", 502);
+  return binary(request, env, file.body);
 }
 
 async function revokeRecipient(request, env, id, recipientId) {
@@ -210,13 +313,10 @@ async function revokeRecipient(request, env, id, recipientId) {
 async function deleteShare(request, env, id) {
   if (!(await requireAdmin(request, env))) return failure(request, env, "管理者驗證失敗。", 401);
   if (!UUID_RE.test(id)) return failure(request, env, "分享識別碼無效。", 400);
-  const share = await env.DB.prepare("SELECT id, chunk_count FROM shares WHERE id = ?").bind(id).first();
+  const share = await env.DB.prepare("SELECT id, storage_page_id FROM shares WHERE id = ?").bind(id).first();
   if (!share) return failure(request, env, "找不到這份分享。", 404);
   await env.DB.prepare("UPDATE shares SET state = 'deleting' WHERE id = ?").bind(id).run();
-  for (let offset = 0; offset < share.chunk_count; offset += 1000) {
-    const keys = Array.from({ length: Math.min(1000, share.chunk_count - offset) }, (_, part) => `${id}/${String(offset + part).padStart(5, "0")}`);
-    await env.SHARES.delete(keys);
-  }
+  await trashStoragePage(env, share.storage_page_id);
   await env.DB.prepare("DELETE FROM shares WHERE id = ?").bind(id).run();
   return json(request, env, { deleted: true });
 }
