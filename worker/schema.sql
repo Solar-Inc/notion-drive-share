@@ -2,6 +2,7 @@ PRAGMA foreign_keys = ON;
 
 CREATE TABLE IF NOT EXISTS shares (
   id TEXT PRIMARY KEY,
+  storage_page_id TEXT NOT NULL,
   metadata TEXT NOT NULL,
   nonce_prefix TEXT NOT NULL,
   chunk_size INTEGER NOT NULL,
@@ -25,6 +26,7 @@ CREATE TABLE IF NOT EXISTS uploaded_chunks (
   share_id TEXT NOT NULL REFERENCES shares(id) ON DELETE CASCADE,
   chunk_index INTEGER NOT NULL,
   byte_length INTEGER NOT NULL,
+  notion_block_id TEXT NOT NULL,
   PRIMARY KEY (share_id, chunk_index)
 );
 
