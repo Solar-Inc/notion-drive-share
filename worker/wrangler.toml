@@ -1,0 +1,16 @@
+name = "notiondrive-share-api"
+main = "src/index.js"
+compatibility_date = "2026-11-07"
+
+[vars]
+ALLOWED_ORIGIN = "https://solar-inc.github.io"
+MAX_RECIPIENTS = "30"
+
+[[r2_buckets]]
+binding = "SHARES"
+bucket_name = "notiondrive-share-ciphertext"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "notiondrive-share"
+database_id = "REPLACE_WITH_YOUR_D1_DATABASE_ID"
