@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#08090d">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src https: http://localhost:* http://127.0.0.1:*; img-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>Notion Drive Share｜安全檢視</title>
+  <link rel="stylesheet" href="share.css">
+</head>
+<body class="viewer-page">
+  <main class="viewer-shell">
+    <header class="topbar"><a class="brand" href="./"><span class="brand-mark">N</span><span><strong>Notion Drive</strong><small>PRIVATE SHARES</small></span></a><span class="badge">加密分享</span></header>
+    <section class="viewer-card panel">
+      <div class="viewer-lock" aria-hidden="true">⌑</div>
+      <p class="eyebrow">PRIVATE FILE</p>
+      <h1 id="title">正在確認分享連結</h1>
+      <p id="description" class="lead">分享內容在你的瀏覽器解密；伺服器看不到密碼或檔案明文。</p>
+      <form id="unlockForm" class="unlock-form hidden">
+        <label class="field"><span>輸入你收到的專屬密碼</span><input id="password" type="password" minlength="12" autocomplete="current-password" required></label>
+        <button class="button primary wide" id="unlockButton" type="submit">解鎖並查看</button>
+      </form>
+      <p id="status" class="status" aria-live="polite">正在驗證連結…</p>
+      <div id="filePanel" class="file-panel hidden">
+        <div class="file-heading"><div><p class="eyebrow">SHARED FILE</p><h2 id="fileName"></h2></div><span id="fileSize" class="file-size"></span></div>
+        <div id="preview" class="preview"></div>
+        <button class="button secondary wide hidden" id="saveButton" type="button">解密並儲存檔案</button>
+      </div>
+    </section>
+    <p class="viewer-footnote">如果連結被撤銷，請聯絡分享者重新授權。已下載的檔案副本無法遠端收回。</p>
+  </main>
+  <script type="module" src="viewer.js"></script>
+</body>
+</html>
