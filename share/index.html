@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#08090d">
+  <meta name="referrer" content="no-referrer">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; connect-src https: http://localhost:* http://127.0.0.1:*; img-src 'self' blob:; media-src 'self' blob:; object-src 'none'; base-uri 'none'; form-action 'self'">
+  <title>Notion Drive Share｜管理分享</title>
+  <link rel="stylesheet" href="share.css">
+</head>
+<body>
+  <main class="shell">
+    <header class="topbar">
+      <a class="brand" href="./" aria-label="Notion Drive Share 首頁"><span class="brand-mark">N</span><span><strong>Notion Drive</strong><small>PRIVATE SHARES</small></span></a>
+      <span class="badge">管理者工作台</span>
+    </header>
+
+    <section class="hero">
+      <p class="eyebrow">OWNER CONSOLE</p>
+      <h1>由你決定，誰能看見。</h1>
+      <p class="lead">上傳後先在你的瀏覽器加密。每位收件人拿到獨立網址與密碼；你可以隨時撤銷個別收件人的權限。</p>
+    </section>
+
+    <section class="panel settings-panel">
+      <div class="panel-heading"><div><p class="eyebrow">連線設定</p><h2>接上你的分享儲存服務</h2></div><span class="status-dot" id="connectionDot"></span></div>
+      <div class="settings-grid">
+        <label class="field"><span>Worker API 網址</span><input id="apiBase" type="url" placeholder="https://your-share-api.workers.dev" autocomplete="url"></label>
+        <label class="field"><span>管理密鑰</span><input id="adminToken" type="password" placeholder="只存在目前分頁，不會寫入 GitHub" autocomplete="off"></label>
+      </div>
+      <div class="row actions"><button class="button secondary" id="connectButton" type="button">連線並載入分享</button><span class="hint" id="connectionStatus">請先完成 Worker 設定。</span></div>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading"><div><p class="eyebrow">NEW SHARE</p><h2>建立檔案分享</h2></div><span class="step">01</span></div>
+      <form id="shareForm">
+        <label class="field upload-field"><span>選擇要分享的檔案</span><input id="fileInput" type="file" required><small>檔案會在瀏覽器分段加密後上傳；儲存服務只收到密文。</small></label>
+        <div class="recipients-heading"><div><h3>收件人與個別密碼</h3><p>每人一組不同密碼與專屬網址。建議使用至少 16 個隨機字元。</p></div><button class="button secondary small" id="addRecipientButton" type="button">＋ 新增收件人</button></div>
+        <div id="recipients" class="recipients"></div>
+        <div class="privacy-note"><span class="lock">⌑</span><p>密碼、解密金鑰與檔案明文不會上傳。網址和密碼請分開傳給收件人。</p></div>
+        <div class="row form-actions"><button class="button primary" id="createShareButton" type="submit">加密並建立分享</button><span class="hint" id="uploadStatus" aria-live="polite"></span></div>
+      </form>
+      <section id="results" class="results hidden" aria-live="polite"><div class="results-heading"><div><p class="eyebrow">READY TO SEND</p><h3>分享已建立</h3></div><span class="success-mark">✓</span></div><p class="hint">請把每人的網址與密碼分開傳送。密碼只在這個畫面顯示；離開後無法從伺服器取回。</p><div id="resultList" class="result-list"></div></section>
+    </section>
+
+    <section class="panel">
+      <div class="panel-heading"><div><p class="eyebrow">ACCESS CONTROL</p><h2>管理現有分享</h2></div><button class="button secondary small" id="refreshButton" type="button">重新整理</button></div>
+      <div id="shareList" class="share-list"><p class="empty">連線後會顯示你的分享。</p></div>
+    </section>
+    <footer><span>Notion Drive Share</span><span>端對端加密 · 個別權限 · 可撤銷</span></footer>
+  </main>
+  <template id="recipientTemplate"><div class="recipient-row"><label class="field"><span>收件人名稱</span><input class="recipient-label" type="text" maxlength="80" placeholder="例如：小明" required></label><label class="field"><span>專屬密碼（至少 12 字元）</span><input class="recipient-password" type="password" minlength="12" autocomplete="new-password" required></label><button class="remove-recipient" type="button" aria-label="移除收件人">×</button></div></template>
+  <script type="module" src="owner.js"></script>
+</body>
+</html>
