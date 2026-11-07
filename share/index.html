@@ -24,18 +24,18 @@
     </section>
 
     <section class="panel settings-panel">
-      <div class="panel-heading"><div><p class="eyebrow">連線設定</p><h2>接上你的分享儲存服務</h2></div><span class="status-dot" id="connectionDot"></span></div>
+      <div class="panel-heading"><div><p class="eyebrow">連線設定</p><h2>接上你的 Notion Drive 分享服務</h2></div><span class="status-dot" id="connectionDot"></span></div>
       <div class="settings-grid">
         <label class="field"><span>Worker API 網址</span><input id="apiBase" type="url" placeholder="https://your-share-api.workers.dev" autocomplete="url"></label>
         <label class="field"><span>管理密鑰</span><input id="adminToken" type="password" placeholder="只存在目前分頁，不會寫入 GitHub" autocomplete="off"></label>
       </div>
-      <div class="row actions"><button class="button secondary" id="connectButton" type="button">連線並載入分享</button><span class="hint" id="connectionStatus">請先完成 Worker 設定。</span></div>
+      <div class="row actions"><button class="button secondary" id="connectButton" type="button">連線並載入分享</button><span class="hint" id="connectionStatus">檔案密文會存入 Notion Drive 根頁面下的分享頁；請先完成 Worker 設定。</span></div>
     </section>
 
     <section class="panel">
       <div class="panel-heading"><div><p class="eyebrow">NEW SHARE</p><h2>建立檔案分享</h2></div><span class="step">01</span></div>
       <form id="shareForm">
-        <label class="field upload-field"><span>選擇要分享的檔案</span><input id="fileInput" type="file" required><small>檔案會在瀏覽器分段加密後上傳；儲存服務只收到密文。</small></label>
+        <label class="field upload-field"><span>選擇要分享的檔案</span><input id="fileInput" type="file" required><small>檔案會在瀏覽器分段加密，再以 Notion Drive 頁面附件儲存；Notion 只收到密文。</small></label>
         <div class="recipients-heading"><div><h3>收件人與個別密碼</h3><p>每人一組不同密碼與專屬網址。建議使用至少 16 個隨機字元。</p></div><button class="button secondary small" id="addRecipientButton" type="button">＋ 新增收件人</button></div>
         <div id="recipients" class="recipients"></div>
         <div class="privacy-note"><span class="lock">⌑</span><p>密碼、解密金鑰與檔案明文不會上傳。網址和密碼請分開傳給收件人。</p></div>

@@ -5,10 +5,7 @@ compatibility_date = "2026-11-07"
 [vars]
 ALLOWED_ORIGIN = "https://solar-inc.github.io"
 MAX_RECIPIENTS = "30"
-
-[[r2_buckets]]
-binding = "SHARES"
-bucket_name = "notiondrive-share-ciphertext"
+NOTION_ROOT_PAGE_ID = "REPLACE_WITH_YOUR_NOTION_DRIVE_ROOT_PAGE_ID"
 
 [[d1_databases]]
 binding = "DB"
