@@ -27,14 +27,67 @@ class D1Mock {
   }
 }
 
-class R2Mock {
-  constructor() { this.objects = new Map(); this.failDelete = false; }
-  async put(key, value) { this.objects.set(key, new Uint8Array(value).slice()); }
-  async get(key) { const value = this.objects.get(key); return value ? { body: value.slice() } : null; }
-  async delete(keys) { if (this.failDelete) throw new Error("storage failure"); for (const key of Array.isArray(keys) ? keys : [keys]) this.objects.delete(key); }
+class NotionMock {
+  constructor() { this.pages = new Map(); this.uploads = new Map(); this.blocks = new Map(); this.files = new Map(); this.failTrash = false; }
+  async fetch(input, init = {}) {
+    const url = String(input), method = init.method || "GET", headers = new Headers(init.headers || {});
+    if (url.startsWith("https://file.notion.so/")) {
+      const bytes = this.files.get(url.split("/").at(-1));
+      return bytes ? new Response(bytes.slice()) : new Response("missing", { status: 404 });
+    }
+    assert.equal(headers.get("Authorization"), "Bearer notion-secret-test-token");
+    assert.equal(headers.get("Notion-Version"), "2026-03-11");
+    const route = new URL(url).pathname;
+    if (route === "/v1/pages" && method === "POST") {
+      const body = JSON.parse(init.body), id = crypto.randomUUID();
+      this.pages.set(id, { id, title: body.properties.title.title[0].text.content, parent: body.parent.page_id, trashed: false, blocks: [] });
+      return Response.json({ id }, { status: 201 });
+    }
+    let match = route.match(/^\/v1\/pages\/([^/]+)$/);
+    if (match && method === "PATCH") {
+      if (this.failTrash) return Response.json({ message: "mock failure" }, { status: 500 });
+      const page = this.pages.get(decodeURIComponent(match[1]));
+      if (!page) return Response.json({}, { status: 404 });
+      page.trashed = JSON.parse(init.body).in_trash === true;
+      return Response.json({ id: page.id });
+    }
+    if (route === "/v1/file_uploads" && method === "POST") {
+      const id = crypto.randomUUID(); this.uploads.set(id, null);
+      return Response.json({ id }, { status: 201 });
+    }
+    match = route.match(/^\/v1\/file_uploads\/([^/]+)\/send$/);
+    if (match && method === "POST") {
+      const file = init.body.get("file");
+      this.uploads.set(decodeURIComponent(match[1]), new Uint8Array(await file.arrayBuffer()));
+      return Response.json({ status: "uploaded" });
+    }
+    match = route.match(/^\/v1\/blocks\/([^/]+)\/children$/);
+    if (match && method === "PATCH") {
+      const page = this.pages.get(decodeURIComponent(match[1]));
+      const body = JSON.parse(init.body), result = [];
+      for (const child of body.children) {
+        const blockId = crypto.randomUUID(), uploadId = child.file.file_upload.id;
+        const block = { id: blockId, type: "file", file: { type: "file", file: { url: `https://file.notion.so/${uploadId}` } } };
+        page.blocks.push(blockId); this.blocks.set(blockId, { ...block, uploadId });
+        this.files.set(uploadId, this.uploads.get(uploadId).slice());
+        result.push({ id: blockId });
+      }
+      return Response.json({ results: result });
+    }
+    match = route.match(/^\/v1\/blocks\/([^/]+)$/);
+    if (match && method === "GET") {
+      const block = this.blocks.get(decodeURIComponent(match[1]));
+      return block ? Response.json(block) : Response.json({}, { status: 404 });
+    }
+    return Response.json({ error: `Unhandled ${method} ${route}` }, { status: 404 });
+  }
 }
 
-function makeEnv() { return { ALLOWED_ORIGIN: ORIGIN, ADMIN_TOKEN: ADMIN, MAX_RECIPIENTS: "30", DB: new D1Mock(), SHARES: new R2Mock() }; }
+function makeEnv() {
+  const notion = new NotionMock();
+  return { ALLOWED_ORIGIN: ORIGIN, ADMIN_TOKEN: ADMIN, MAX_RECIPIENTS: "30", DB: new D1Mock(),
+    NOTION_TOKEN: "notion-secret-test-token", NOTION_ROOT_PAGE_ID: "root-page-id-for-notion-drive", NOTION_FETCH: notion.fetch.bind(notion), NOTION_MOCK: notion };
+}
 
 async function call(env, method, path, body, token = ADMIN, origin = ORIGIN) {
   const headers = { Origin: origin, Authorization: `Bearer ${token}` };
@@ -84,29 +137,34 @@ test("權限、建立、區塊驗證、提交、個別密碼和個別撤銷完�
   assert.equal(saved.token_hash, recipients[0].tokenHash);
   assert.ok(!JSON.stringify(saved).includes(recipients[0].token));
   assert.ok(!JSON.stringify(saved).includes(recipients[0].password));
-  assert.notDeepEqual(env.SHARES.objects.values().next().value, f.plain);
+  const savedShare = env.DB.db.prepare("SELECT * FROM shares WHERE id = ?").get(id);
+  const storagePage = env.NOTION_MOCK.pages.get(savedShare.storage_page_id);
+  assert.equal(storagePage.parent, env.NOTION_ROOT_PAGE_ID);
+  assert.equal(storagePage.title, `NDSHARE1.${id}`);
+  assert.equal(storagePage.blocks.length, 1);
+  assert.notDeepEqual(env.NOTION_MOCK.files.values().next().value, f.plain);
 
   assert.equal((await call(env, "DELETE", `/api/admin/shares/${id}/recipients/${recipients[1].id}`)).status, 200);
   assert.equal((await call(env, "GET", `/api/share/${id}`, undefined, recipients[1].token)).status, 404);
   assert.equal((await call(env, "GET", `/api/share/${id}/chunks/0`, undefined, recipients[1].token)).status, 404);
   assert.equal((await call(env, "GET", `/api/share/${id}`, undefined, recipients[0].token)).status, 200);
   assert.equal((await call(env, "DELETE", `/api/admin/shares/${id}`)).status, 200);
-  assert.equal(env.SHARES.objects.size, 0);
+  assert.equal(env.NOTION_MOCK.pages.get(savedShare.storage_page_id).trashed, true);
   assert.equal(env.DB.db.prepare("SELECT COUNT(*) AS count FROM recipients").get().count, 0);
   assert.equal((await call(env, "GET", `/api/share/${id}`, undefined, recipients[0].token)).status, 404);
 });
 
-test("刪除儲存區失敗時先停止存取，並保留可重試狀態", async () => {
+test("Notion Drive 清理失敗時先停止存取，並保留可重試狀態", async () => {
   const f = await fixture(), { env, id } = f;
   await call(env, "POST", "/api/admin/shares", f.body);
   await call(env, "PUT", `/api/admin/shares/${id}/chunks/0`, f.cipher);
   await call(env, "POST", `/api/admin/shares/${id}/commit`, {});
-  env.SHARES.failDelete = true;
+  env.NOTION_MOCK.failTrash = true;
   assert.equal((await call(env, "DELETE", `/api/admin/shares/${id}`)).status, 500);
   assert.equal((await call(env, "GET", `/api/share/${id}`, undefined, f.recipients[0].token)).status, 404);
   const list = await (await call(env, "GET", "/api/admin/shares")).json();
   assert.equal(list.shares[0].state, "deleting");
-  env.SHARES.failDelete = false;
+  env.NOTION_MOCK.failTrash = false;
   assert.equal((await call(env, "DELETE", `/api/admin/shares/${id}`)).status, 200);
 });
 
@@ -118,5 +176,5 @@ test("重複連結 token、異常大小與超量區塊會被拒絕", async () =>
   assert.equal((await call(f.env, "POST", "/api/admin/shares", { ...f.body, chunkCount: 10001 })).status, 400);
   await call(f.env, "POST", "/api/admin/shares", f.body);
   assert.equal((await call(f.env, "PUT", `/api/admin/shares/${f.id}/chunks/0`, new Uint8Array(f.cipher.length + 1))).status, 400);
-  assert.equal(f.env.SHARES.objects.size, 0);
+  assert.equal(f.env.NOTION_MOCK.files.size, 0);
 });
